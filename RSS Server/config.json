@@ -1,0 +1,108 @@
+// config.js - Основные настройки сервера и RSS для YouTube
+import { fileURLToPath } from 'url';
+import path from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export default {
+  // === НАСТРОЙКИ СЕРВЕРА ===
+  server: {
+    // Хост для запуска сервера (0.0.0.0 для доступа из сети)
+    host: '0.0.0.0',
+    // Порт сервера
+    port: 3000,
+    // Базовый URL для RSS (если оставить пустым, определится автоматически)
+    // Пример: 'http://ваш-ip:3000' или 'https://ваш-домен.com'
+    baseUrl: '',
+  },
+
+  // === НАСТРОЙКИ RSS ДЛЯ YOUTUBE ===
+  rss: {
+    // Название канала в YouTube Music
+    title: 'Example Title',
+    // Ссылка на ваш сайт или профиль
+    link: 'https://example.com',
+    // Описание канала (отображается в YouTube)
+    description: 'Example',
+    // Язык контента
+    language: 'en',
+    // Копирайт
+    copyright: '© Example',
+    // Автор (ваше имя/псевдоним)
+    author: 'Example',
+    // Email для подтверждения владения RSS в YouTube
+    email: 'example@gmail.com',
+    // Явный контент? (yes/no) - YouTube проверяет это
+    explicit: 'no',
+    // Категория для YouTube
+    category: 'Music',
+    // Подкатегория (опционально)
+    subcategory: 'Electronic',
+    
+    // === НАСТРОЙКИ ОБЛОЖЕК ДЛЯ КВАДРАТНЫХ ВИДЕО ===
+    // YouTube создает 1:1 видео из обложки, поэтому:
+    // 1. Используйте квадратные обложки (1:1)
+    // 2. Рекомендуемый размер: 3000x3000 пикселей
+    // 3. Формат: JPEG или PNG
+    
+    // Обложка канала (URL или путь к файлу)
+    // Если оставить пустым, будет использоваться первая обложка из треков
+    channelImage: '',
+    
+    // === ОПТИМИЗАЦИЯ ДЛЯ YOUTUBE ===
+    youtube: {
+      // Генерировать квадратные обложки из ID3 тегов
+      generateSquareCovers: true,
+      // Размер обложки для YouTube (рекомендуется 3000)
+      coverSize: 3000,
+      // Автоматически извлекать обложки из MP3 файлов
+      extractCoversFromMP3: true,
+      // Использовать обложку трека как thumbnail в YouTube
+      useTrackCoverAsThumbnail: true,
+    },
+  },
+
+  // === НАСТРОЙКИ ФАЙЛОВОЙ СИСТЕМЫ ===
+  paths: {
+    // Папка с треками (относительно папки server.js)
+    tracksDir: path.join(__dirname, 'tracks'),
+    // Папка для кэша обложек
+    coversCacheDir: path.join(__dirname, '.covers_cache'),
+  },
+
+  // === НАСТРОЙКИ ПАРСИНГА ФАЙЛОВ ===
+  fileParsing: {
+    // Паттерн для автоматического определения артиста и названия из папок
+    // Пример: "Artist - Track Name" папка -> артист: "Artist", название: "Track Name"
+    folderPattern: '{artist} - {title}',
+    // Разделитель между артистом и названием
+    separator: ' - ',
+    // Искать ID3 теги в аудиофайлах
+    readID3Tags: true,
+    // Приоритет источника названия (1 - ID3 теги, 2 - имя файла, 3 - имя папки)
+    titlePriority: ['id3', 'filename', 'foldername'],
+  },
+
+  // === НАСТРОЙКИ КЭШИРОВАНИЯ ===
+  cache: {
+    // Кэшировать обложки (ускоряет генерацию RSS)
+    enabled: true,
+    // Время жизни кэша обложек в миллисекундах (24 часа)
+    ttl: 24 * 60 * 60 * 1000,
+    // Максимальный размер кэша в МБ
+    maxSizeMB: 500,
+  },
+
+  // === ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ ===
+  advanced: {
+    // Показывать подробные логи
+    verboseLogging: true,
+    // Автоматически создавать недостающие папки
+    createMissingDirs: true,
+    // Проверять доступность файлов перед добавлением в RSS
+    validateFiles: true,
+    // Максимальное количество треков в RSS (YouTube поддерживает до 100)
+    maxTracksInRSS: 100,
+  },
+};
