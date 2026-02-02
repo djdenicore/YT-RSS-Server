@@ -27,7 +27,7 @@ export default {
   // === НАСТРОЙКИ RSS ДЛЯ YOUTUBE ===
   rss: {
     // Название канала в YouTube Music
-    title: 'Test',
+    title: 'Exemple Podcast',
     
     // Ссылка на ваш сайт или профиль
     link: 'https://exemple.com/',
@@ -39,10 +39,10 @@ export default {
     language: 'en',
     
     // Копирайт
-    copyright: '© Exemple',
+    copyright: '© 2026 Exemple',
     
     // Автор (ваше имя/псевдоним)
-    author: 'Name',
+    author: 'Exemple',
     
     // Email для подтверждения владения RSS в YouTube
     // YouTube отправит письмо на эту почту для верификации
@@ -60,7 +60,7 @@ export default {
     // Обложка канала (URL или путь к файлу)
     // ОБЯЗАТЕЛЬНО для YouTube! Рекомендуется квадратное изображение 3000x3000
     // Примечание: будет скачана, обрезана до квадрата и сохранена в .covers_cache
-    channelImage: 'https://playlist_image.png/',
+    channelImage: 'https://exemple.com/cover.jpg',
     
     // === ОПТИМИЗАЦИЯ ДЛЯ YOUTUBE ===
     youtube: {
@@ -134,7 +134,7 @@ export default {
   },
 
   // === ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ ===
-  advanced: {
+  advanced: { 
     // Показывать подробные логи
     // ВКЛЮЧЕНО: отображает информацию о загрузке файлов, обрезке обложек и т.д.
     verboseLogging: true,
@@ -173,5 +173,69 @@ export default {
       username: '',
       password: '',
     },
+  },
+
+  // === СОЦИАЛЬНЫЕ ССЫЛКИ ===
+  // Ссылки для отображения в description треков
+  social: {
+    links: [
+      { name: '✔ SoundCloud', url: 'https://soundcloud.com/exemple' },
+      { name: '✔ Twitter', url: 'https://twitter.com/exemple' },
+      { name: '✔ Facebook', url: 'https://facebook.com/exemple' },
+      { name: '✔ Instagram', url: 'https://instagram.com/exemple' },
+      { name: '✔ YouTube', url: 'https://youtube.com/@exemple' },
+    ],
+  },
+
+  // === ШАБЛОН DESCRIPTION ===
+  // Шаблон для description треков. Используйте переменные:
+  // {RELEASE_BY} - из TXXX:Release By
+  // {RELEASE_LINK} - ссылка на релиз
+  // {TITLE} - название трека (TIT2)
+  // {AUTHOR} - исполнитель (TPE1)
+  // {ALBUM} - альбом (TALB)
+  // {GENRE} - жанр (TCON)
+  // {ORIGINAL_ARTISTS} - оригинальные исполнители (TXXX:Orig Aut)
+  // {DATE} - дата (TDRC)
+  // {DJ} - DJ (TXXX:DJ)
+  // {LABEL} - лейбл (TXXX:Label)
+  // {SOCIAL_LINKS} - социальные ссылки из social.links
+  // {CREDITS} - кредиты (TXXX:Credits, только если есть)
+  descriptionTemplate: {
+    // Включить использование шаблона из config
+    enabled: true,
+    
+    // Шаблон description
+    template: `𝔻𝕖𝕤𝕔𝕣𝕚𝕡𝕥𝕚𝕠𝕟
+
+This release is published by {RELEASE_BY}.
+
+🔗 𝕊𝕥𝕣𝕖𝕒𝕞 & 𝔻𝕠𝕨𝕟𝕝𝕠𝕒𝕕
+{RELEASE_LINK}
+
+▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+
+𝔸𝕓𝕠𝕦𝕥 𝕣𝕖𝕝𝕖𝕒𝕤𝕖
+
+• Title: {TITLE}
+• Author: {AUTHOR}
+• Album: {ALBUM}
+• Genre: {GENRE}
+• Original Artists: {ORIGINAL_ARTISTS}
+• Release date: {DATE}
+• DJ: {DJ}
+• Label: {LABEL}
+
+▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+
+𝕊𝕠𝕔𝕚𝕒𝕝
+
+{SOCIAL_LINKS}`,
+    
+    // Шаблон Credits (добавляется в конце если есть данные)
+    creditsTemplate: `▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+
+ℂ𝕣𝕖𝕕𝕚𝕥𝕤
+{CREDITS}`,
   },
 };
