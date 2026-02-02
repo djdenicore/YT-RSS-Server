@@ -17,7 +17,7 @@ const app = express();
 
 // Настройки из конфига
 const PORT = process.env.PORT || config.server.port;
-const HOST = config.server.host || 'localhost'; // Для прослушивания
+const HOST = config.server.host || 'localhost';
 const TRACKS_DIR = config.paths.tracksDir;
 const COVERS_CACHE_DIR = config.paths.coversCacheDir;
 
@@ -89,7 +89,7 @@ async function initDirs() {
     try {
       await fs.mkdir(dir, { recursive: true });
       if (config.advanced.verboseLogging) {
-        console.log(`📁 Создана папка: ${dir}`);
+        console.log(`Directory created: ${dir}`);
       }
     } catch (e) {
       if (e.code !== 'EEXIST') throw e;
@@ -125,57 +125,240 @@ function parseTrackInfo(folderName, fileName) {
   return { artist, title };
 }
 
+// Функция для получения значения из ID3 тегов
+function getTagValue(metadata, tagPath) {
+  const parts = tagPath.split('.');
+  let value = metadata;
+  
+  for (const part of parts) {
+    if (value && typeof value === 'object') {
+      if (Array.isArray(value)) {
+        value = value[0];
+      } else {
+        value = value[part];
+      }
+    } else {
+      return null;
+    }
+  }
+  
+  if (Array.isArray(value)) {
+    value = value[0];
+  }
+  
+  return value || null;
+}
+
+// Функция для безопасного отображения значения (заменяет null/empty на -)
+function safeDisplay(value) {
+  if (value === null || value === undefined || value === '') {
+    return '-';
+  }
+  return value;
+}
+
+// Функция для замены переменных в шаблоне
+function replaceTemplateVariables(template, variables) {
+  let result = template;
+  for (const [key, value] of Object.entries(variables)) {
+    result = result.replace(new RegExp('\\{' + key + '\\}', 'g'), value);
+  }
+  return result;
+}
+
+// Генерация description для трека по шаблону из config
+function generateTrackDescription(metadata, trackTitle, trackAuthor, releaseLink) {
+  // Для отладки - выводим все теги в консоль
+  if (config.advanced.verboseLogging) {
+    console.log(`ID3 tags for ${trackTitle}:`);
+    console.log('  native:', JSON.stringify(metadata.native, null, 2));
+  }
+  
+  // Извлекаем данные из ID3 тегов
+  const title = getTagValue(metadata, 'common.title') || trackTitle || '-';
+  const artist = getTagValue(metadata, 'common.artist') || trackAuthor || '-';
+  const album = getTagValue(metadata, 'common.album') || '-';
+  const genre = getTagValue(metadata, 'common.genre') || '-';
+  
+  // Получаем нативные теги ID3v2.4
+  let nativeTags = [];
+  if (metadata.native && metadata.native['ID3v2.4']) {
+    nativeTags = metadata.native['ID3v2.4'];
+  }
+  
+  // Original Artists - сначала ищем TXXX:Orig Aut из нативных тегов
+  var originalArtists = '-';
+  
+  if (nativeTags && Array.isArray(nativeTags)) {
+    // Ищем TXXX:Orig Aut или TXXX:Original Artists
+    var origAutTag = nativeTags.find(function(t) { 
+      return t.id === 'TXXX:Orig Aut' || t.id === 'TXXX:Original Artists'; 
+    });
+    if (origAutTag && origAutTag.value) {
+      originalArtists = origAutTag.value;
+    }
+  }
+  
+  // Если не нашли в TXXX, пробуем другие источники
+  if (originalArtists === '-') {
+    originalArtists = getTagValue(metadata, 'common.originalartist') || 
+                     nativeTags.find(function(t) { return t.id === 'TPE2'; })?.value ||
+                     '-';
+  }
+  
+  const date = getTagValue(metadata, 'common.date') || 
+               getTagValue(metadata, 'format.timestamp') || 
+               '-';
+  
+  // TXXX теги
+  let label = '-';
+  let dj = '-';
+  let credits = '-';
+  let releaseBy = '-';
+  let customReleaseLink = releaseLink || '-';
+  
+  if (nativeTags && Array.isArray(nativeTags)) {
+    nativeTags.filter(function(t) { return t.id && t.id.startsWith('TXXX:'); }).forEach(function(tag) {
+      var desc = tag.id.substring(5);
+      var value = tag.value || '';
+      var descLower = desc.toLowerCase();
+      
+      if (descLower === 'label' || desc === 'Label') {
+        label = value;
+      }
+      if (descLower === 'dj' || desc === 'Dj') {
+        dj = value;
+      }
+      if (descLower === 'credits' || desc === 'Credits') {
+        credits = value;
+      }
+      if (descLower === 'release link' || desc === 'Release Link') {
+        customReleaseLink = value;
+      }
+      if (descLower === 'release by' || desc === 'Release By') {
+        releaseBy = value;
+      }
+    });
+  }
+  
+  // Формируем социальные ссылки из конфига
+  var socialLinksHtml = '';
+  if (config.social && config.social.links && Array.isArray(config.social.links) && config.social.links.length > 0) {
+    socialLinksHtml = config.social.links.map(function(link) {
+      return link.name + ': ' + link.url;
+    }).join('\n');
+  } else {
+    socialLinksHtml = '-';
+  }
+  
+  // Ссылка на релиз
+  var releaseUrl = customReleaseLink || releaseLink || '-';
+  
+  // Используем шаблон из config или стандартный
+  var description = '';
+  
+  if (config.descriptionTemplate && config.descriptionTemplate.enabled) {
+    // Переменные для замены в шаблоне
+    var variables = {
+      'RELEASE_BY': safeDisplay(releaseBy),
+      'RELEASE_LINK': releaseUrl,
+      'TITLE': safeDisplay(title),
+      'AUTHOR': safeDisplay(artist),
+      'ALBUM': safeDisplay(album),
+      'GENRE': safeDisplay(genre),
+      'ORIGINAL_ARTISTS': safeDisplay(originalArtists),
+      'DATE': safeDisplay(date),
+      'DJ': safeDisplay(dj),
+      'LABEL': safeDisplay(label),
+      'SOCIAL_LINKS': socialLinksHtml,
+    };
+    
+    description = replaceTemplateVariables(config.descriptionTemplate.template, variables);
+    
+    // Добавляем Credits только если есть данные
+    if (credits && credits !== '-' && credits !== '') {
+      var creditsVariables = Object.assign({}, variables, { 'CREDITS': credits });
+      description += replaceTemplateVariables(config.descriptionTemplate.creditsTemplate, creditsVariables);
+    }
+  } else {
+    // Стандартный шаблон (для совместимости)
+    description = '𝔻𝕖𝕤𝕔𝕣𝕚𝕡𝕥𝕚𝕠𝕟\n\n' +
+      'This release is published by ' + safeDisplay(releaseBy) + '.\n\n' +
+      '🔗 𝕊𝕥𝕣𝕖𝕒𝕞 & 𝔻𝕠𝕨𝕟𝕝𝕠𝕒𝕕\n' +
+      releaseUrl + '\n\n' +
+      '▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n' +
+      '𝔸𝕓𝕠𝕦𝕥 𝕣𝕖𝕝𝕖𝕒𝕤𝕖\n\n' +
+      '• Title: ' + safeDisplay(title) + '\n' +
+      '• Author: ' + safeDisplay(artist) + '\n' +
+      '• Album: ' + safeDisplay(album) + '\n' +
+      '• Genre: ' + safeDisplay(genre) + '\n' +
+      '• Original Artists: ' + safeDisplay(originalArtists) + '\n' +
+      '• Release date: ' + safeDisplay(date) + '\n' +
+      '• DJ: ' + safeDisplay(dj) + '\n' +
+      '• Label: ' + safeDisplay(label) + '\n\n' +
+      '▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n' +
+      '𝕊𝕠𝕔𝕚𝕒𝕝\n\n' +
+      socialLinksHtml;
+    
+    // Добавляем Credits только если есть данные
+    if (credits && credits !== '-' && credits !== '') {
+      description += '\n\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n' +
+        'ℂ𝕣𝕖𝕕𝕚𝕥𝕤\n' +
+        credits;
+    }
+  }
+  
+  return description;
+}
+
 // Генерация стабильного GUID
 function generateStableGuid(filePath, stat) {
   try {
-    const fileKey = `${filePath}:${stat.size}`;
+    var fileKey = filePath + ':' + stat.size;
     
     if (fileGuidCache.has(fileKey)) {
       return fileGuidCache.get(fileKey);
     }
     
-    const hash = crypto.createHash('sha256').update(fileKey).digest('hex');
-    const uuid = `${hash.substring(0, 8)}-${hash.substring(8, 12)}-${hash.substring(12, 16)}-${hash.substring(16, 20)}-${hash.substring(20, 32)}`;
-    const guid = `urn:uuid:${uuid}`;
+    var hash = crypto.createHash('sha256').update(fileKey).digest('hex');
+    var uuid = hash.substring(0, 8) + '-' + hash.substring(8, 12) + '-' + hash.substring(12, 16) + '-' + hash.substring(16, 20) + '-' + hash.substring(20, 32);
+    var guid = 'urn:uuid:' + uuid;
     
     fileGuidCache.set(fileKey, guid);
     return guid;
   } catch (error) {
-    const backupHash = crypto.createHash('md5').update(filePath).digest('hex');
-    return `urn:uuid:${backupHash.substring(0, 8)}-${backupHash.substring(8, 12)}-${backupHash.substring(12, 16)}-${backupHash.substring(16, 20)}-${backupHash.substring(20, 32)}`;
+    var backupHash = crypto.createHash('md5').update(filePath).digest('hex');
+    return 'urn:uuid:' + backupHash.substring(0, 8) + '-' + backupHash.substring(8, 12) + '-' + backupHash.substring(12, 16) + '-' + backupHash.substring(16, 20) + '-' + backupHash.substring(20, 32);
   }
 }
 
 // Функция для обрезки изображения в квадрат
-async function cropToSquare(imageBuffer, size = 3000) {
+async function cropToSquare(imageBuffer, size) {
+  size = size || 3000;
   try {
-    const image = sharp(imageBuffer);
-    const metadata = await image.metadata();
+    var image = sharp(imageBuffer);
+    var metadata = await image.metadata();
     
-    // Если изображение уже квадратное и нужного размера
     if (metadata.width === metadata.height && metadata.width === size) {
       return await image.jpeg({ quality: 90 }).toBuffer();
     }
     
-    // Определяем режим обрезки
-    const cropMode = config.rss.youtube.cropMode || 'crop';
+    var cropMode = config.rss.youtube.cropMode || 'crop';
     
     if (cropMode === 'crop') {
-      // Режим обрезки: обрезаем до квадрата по центру
-      const minSize = Math.min(metadata.width, metadata.height);
-      const left = Math.floor((metadata.width - minSize) / 2);
-      const top = Math.floor((metadata.height - minSize) / 2);
+      var minSize = Math.min(metadata.width, metadata.height);
+      var left = Math.floor((metadata.width - minSize) / 2);
+      var top = Math.floor((metadata.height - minSize) / 2);
       
       return await image
-        .extract({ left, top, width: minSize, height: minSize })
+        .extract({ left: left, top: top, width: minSize, height: minSize })
         .resize(size, size, { fit: 'fill' })
         .jpeg({ quality: 90 })
         .toBuffer();
     } else {
-      // Режим background: сохраняем пропорции, добавляем фон
-      const ratio = Math.min(size / metadata.width, size / metadata.height);
-      const newWidth = Math.round(metadata.width * ratio);
-      const newHeight = Math.round(metadata.height * ratio);
+      var ratio = Math.min(size / metadata.width, size / metadata.height);
+      var newWidth = Math.round(metadata.width * ratio);
+      var newHeight = Math.round(metadata.height * ratio);
       
       return await image
         .resize(newWidth, newHeight, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 } })
@@ -190,7 +373,7 @@ async function cropToSquare(imageBuffer, size = 3000) {
         .toBuffer();
     }
   } catch (error) {
-    throw new Error(`Ошибка обрезки изображения: ${error.message}`);
+    throw new Error('Image crop error: ' + error.message);
   }
 }
 
@@ -201,44 +384,37 @@ async function processChannelCover(baseUrl) {
       return '';
     }
     
-    // Создаем хэш URL обложки канала
-    const coverHash = crypto.createHash('md5').update(config.rss.channelImage).digest('hex').substring(0, 12);
-    const coverFilename = `channel_${coverHash}_${config.rss.youtube.coverSize}.jpg`;
-    const coverPath = path.join(COVERS_CACHE_DIR, coverFilename);
+    var coverHash = crypto.createHash('md5').update(config.rss.channelImage).digest('hex').substring(0, 12);
+    var coverFilename = 'channel_' + coverHash + '_' + config.rss.youtube.coverSize + '.jpg';
+    var coverPath = path.join(COVERS_CACHE_DIR, coverFilename);
     
-    // Проверяем, существует ли уже обработанная обложка
     try {
       await fs.access(coverPath);
       if (config.advanced.verboseLogging) {
-        console.log(`🎨 Используется кэшированная обложка канала`);
+        console.log('Using cached channel cover');
       }
-      return `${baseUrl}/covers_cache/${coverFilename}`;
+      return baseUrl + '/covers_cache/' + coverFilename;
     } catch (e) {
-      // Обложка не существует, нужно скачать и обработать
+      // Cover doesn't exist
     }
     
-    // Скачиваем обложку канала
     if (config.advanced.verboseLogging) {
-      console.log(`⬇️  Скачиваем обложку канала: ${config.rss.channelImage}`);
+      console.log('Downloading channel cover: ' + config.rss.channelImage);
     }
     
-    const imageBuffer = await downloadImage(config.rss.channelImage);
-    
-    // Обрезаем до квадрата
-    const squareImage = await cropToSquare(imageBuffer, config.rss.youtube.coverSize);
-    
-    // Сохраняем
+    var imageBuffer = await downloadImage(config.rss.channelImage);
+    var squareImage = await cropToSquare(imageBuffer, config.rss.youtube.coverSize);
     await sharp(squareImage).toFile(coverPath);
     
     if (config.advanced.verboseLogging) {
-      console.log(`✅ Обложка канала обработана и сохранена`);
+      console.log('Channel cover processed and saved');
     }
     
-    return `${baseUrl}/covers_cache/${coverFilename}`;
+    return baseUrl + '/covers_cache/' + coverFilename;
     
   } catch (error) {
     if (config.advanced.verboseLogging) {
-      console.log(`⚠️  Не удалось обработать обложку канала: ${error.message}`);
+      console.log('Failed to process channel cover: ' + error.message);
     }
     return '';
   }
@@ -247,48 +423,41 @@ async function processChannelCover(baseUrl) {
 // Обработка обложки трека из ID3 тегов
 async function processTrackCover(metadata, filePath, stat, baseUrl) {
   try {
-    // Если в треке нет обложки
-    if (!metadata.common?.picture?.[0]?.data) {
+    if (!metadata.common || !metadata.common.picture || !metadata.common.picture[0] || !metadata.common.picture[0].data) {
       return null;
     }
     
-    const picture = metadata.common.picture[0];
+    var picture = metadata.common.picture[0];
+    var fileHash = crypto.createHash('md5').update(filePath + ':' + stat.size).digest('hex').substring(0, 12);
+    var coverFilename = 'track_' + fileHash + '_' + config.rss.youtube.coverSize + '.jpg';
+    var coverPath = path.join(COVERS_CACHE_DIR, coverFilename);
     
-    // Создаем уникальное имя файла на основе хэша файла
-    const fileHash = crypto.createHash('md5').update(`${filePath}:${stat.size}`).digest('hex').substring(0, 12);
-    const coverFilename = `track_${fileHash}_${config.rss.youtube.coverSize}.jpg`;
-    const coverPath = path.join(COVERS_CACHE_DIR, coverFilename);
-    
-    // Проверяем, существует ли уже обработанная обложка
     try {
       await fs.access(coverPath);
       if (config.advanced.verboseLogging) {
-        console.log(`🎨 Используется кэшированная обложка для ${path.basename(filePath)}`);
+        console.log('Using cached cover for ' + path.basename(filePath));
       }
-      return `${baseUrl}/covers_cache/${coverFilename}`;
+      return baseUrl + '/covers_cache/' + coverFilename;
     } catch (e) {
-      // Обложка не существует, обрабатываем
+      // Cover doesn't exist
     }
     
     if (config.advanced.verboseLogging) {
-      console.log(`✂️  Обрабатываем обложку для ${path.basename(filePath)}`);
+      console.log('Processing cover for ' + path.basename(filePath));
     }
     
-    // Обрезаем до квадрата
-    const squareImage = await cropToSquare(picture.data, config.rss.youtube.coverSize);
-    
-    // Сохраняем
+    var squareImage = await cropToSquare(picture.data, config.rss.youtube.coverSize);
     await sharp(squareImage).toFile(coverPath);
     
     if (config.advanced.verboseLogging) {
-      console.log(`✅ Обложка сохранена: ${coverFilename}`);
+      console.log('Cover saved: ' + coverFilename);
     }
     
-    return `${baseUrl}/covers_cache/${coverFilename}`;
+    return baseUrl + '/covers_cache/' + coverFilename;
     
   } catch (error) {
     if (config.advanced.verboseLogging) {
-      console.log(`⚠️  Не удалось обработать обложку для ${path.basename(filePath)}: ${error.message}`);
+      console.log('Failed to process cover for ' + path.basename(filePath) + ': ' + error.message);
     }
     return null;
   }
@@ -296,22 +465,23 @@ async function processTrackCover(metadata, filePath, stat, baseUrl) {
 
 // Поиск аудиофайлов
 async function findAudioFiles() {
-  const files = [];
+  var files = [];
   
   try {
-    const entries = await fs.readdir(TRACKS_DIR, { withFileTypes: true });
+    var entries = await fs.readdir(TRACKS_DIR, { withFileTypes: true });
     
-    for (const entry of entries) {
-      const entryPath = path.join(TRACKS_DIR, entry.name);
+    for (var i = 0; i < entries.length; i++) {
+      var entry = entries[i];
+      var entryPath = path.join(TRACKS_DIR, entry.name);
       
       if (entry.isDirectory()) {
-        const subEntries = await fs.readdir(entryPath);
-        for (const subEntry of subEntries) {
-          if (/\.(mp3|m4a|flac|wav|ogg)$/i.test(subEntry)) {
+        var subEntries = await fs.readdir(entryPath);
+        for (var j = 0; j < subEntries.length; j++) {
+          if (/\.(mp3|m4a|flac|wav|ogg)$/i.test(subEntries[j])) {
             files.push({
-              path: path.join(entryPath, subEntry),
+              path: path.join(entryPath, subEntries[j]),
               folder: entry.name,
-              filename: subEntry
+              filename: subEntries[j]
             });
           }
         }
@@ -325,7 +495,7 @@ async function findAudioFiles() {
     }
   } catch (error) {
     if (config.advanced.verboseLogging) {
-      console.error('❌ Ошибка чтения папки tracks:', error);
+      console.error('Error reading tracks folder:', error);
     }
   }
   
@@ -335,8 +505,8 @@ async function findAudioFiles() {
 // Получение хэша содержимого папки
 async function getTracksFolderHash() {
   try {
-    const files = await findAudioFiles();
-    const fileInfo = files.map(f => `${f.path}:${f.filename}`).sort().join('|');
+    var files = await findAudioFiles();
+    var fileInfo = files.map(function(f) { return f.path + ':' + f.filename; }).sort().join('|');
     return crypto.createHash('md5').update(fileInfo).digest('hex');
   } catch (error) {
     return Date.now().toString();
@@ -345,64 +515,66 @@ async function getTracksFolderHash() {
 
 // Генерация RSS данных
 async function generateRssData(baseUrl) {
-  const now = new Date();
+  var now = new Date();
   
-  // Ищем аудиофайлы
-  const audioFiles = await findAudioFiles();
+  var audioFiles = await findAudioFiles();
   
   if (audioFiles.length === 0) {
     throw new Error('No audio files found in tracks folder');
   }
   
-  // Обрабатываем обложку канала
-  let channelCoverUrl = '';
+  var channelCoverUrl = '';
   if (config.rss.channelImage) {
     channelCoverUrl = await processChannelCover(baseUrl);
   }
   
-  // Обрабатываем файлы
-  const items = [];
+  var items = [];
   
-  for (let i = 0; i < audioFiles.length; i++) {
-    const file = audioFiles[i];
+  for (var i = 0; i < audioFiles.length; i++) {
+    var file = audioFiles[i];
     
     try {
-      const fileUrl = `${baseUrl}/tracks/${encodeURIComponent(file.folder ? path.join(file.folder, file.filename) : file.filename)}`;
-      const stat = await fs.stat(file.path);
-      const metadata = await parseFile(file.path);
+      var fileUrl = baseUrl + '/tracks/' + encodeURIComponent(file.folder ? path.join(file.folder, file.filename) : file.filename);
+      var stat = await fs.stat(file.path);
+      var metadata = await parseFile(file.path);
       
-      // Парсим информацию
-      const { artist, title } = parseTrackInfo(file.folder, file.filename);
+      var trackInfo = parseTrackInfo(file.folder, file.filename);
       
-      // Обрабатываем обложку трека
-      let coverUrl = null;
+      var coverUrl = null;
       if (config.rss.youtube.generateSquareCovers) {
         coverUrl = await processTrackCover(metadata, file.path, stat, baseUrl);
       }
       
-      // Если у трека нет обложки, используем обложку канала
       if (!coverUrl && channelCoverUrl) {
         coverUrl = channelCoverUrl;
       }
       
-      // Создаем стабильный GUID
-      const guidValue = generateStableGuid(file.path, stat);
+      // Извлекаем Release Link из TXXX тегов
+      var releaseLink = '';
+      if (metadata.native && Array.isArray(metadata.native)) {
+        var txxxTag = metadata.native.find(function(t) { 
+          return t.id === 'TXXX' && t.value; 
+        });
+        if (txxxTag && txxxTag.value) {
+          releaseLink = txxxTag.value;
+        }
+      }
       
-      // Создаем item для RSS
-      const item = {
-        title: metadata.common?.title || title,
+      var trackDescription = generateTrackDescription(metadata, trackInfo.title, trackInfo.artist, releaseLink);
+      var guidValue = generateStableGuid(file.path, stat);
+      
+      var item = {
+        title: metadata.common && metadata.common.title ? metadata.common.title : trackInfo.title,
         pubDate: stat.mtime.toUTCString(),
         link: fileUrl,
-        
         guid: {
           '#text': guidValue,
           '@_isPermaLink': 'false'
         },
-        
-        'itunes:duration': formatDuration(metadata.format?.duration),
-        'itunes:author': metadata.common?.artist || artist,
+        'itunes:duration': formatDuration(metadata.format && metadata.format.duration),
+        'itunes:author': (metadata.common && metadata.common.artist) ? metadata.common.artist : trackInfo.artist,
         'itunes:explicit': config.rss.explicit,
-        description: metadata.common?.comment?.[0] || `${title} by ${artist}`,
+        description: trackDescription,
         enclosure: {
           '@_type': 'audio/mpeg',
           '@_url': fileUrl,
@@ -410,7 +582,6 @@ async function generateRssData(baseUrl) {
         }
       };
       
-      // Добавляем обложку, если есть
       if (coverUrl) {
         item['itunes:image'] = { '@_href': coverUrl };
       }
@@ -418,26 +589,24 @@ async function generateRssData(baseUrl) {
       items.push(item);
       
       if (config.advanced.verboseLogging) {
-        console.log(`📝 Добавлен трек: ${item.title}${coverUrl ? ' (с обложкой)' : ' (без обложки)'}`);
+        console.log('Added track: ' + item.title + (coverUrl ? ' (with cover)' : ' (without cover)'));
       }
       
     } catch (error) {
       if (config.advanced.verboseLogging) {
-        console.log(`⚠️  Пропускаем файл ${file.filename}: ${error.message}`);
+        console.log('Skipping file ' + file.filename + ': ' + error.message);
       }
       continue;
     }
   }
   
-  // Сортируем по дате (новые сверху)
-  items.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
+  // Сортируем по дате
+  items.sort(function(a, b) { return new Date(b.pubDate) - new Date(a.pubDate); });
   
-  // Ограничиваем количество
-  const maxItems = Math.min(items.length, config.advanced.maxTracksInRSS);
-  const limitedItems = items.slice(0, maxItems);
+  var maxItems = Math.min(items.length, config.advanced.maxTracksInRSS);
+  var limitedItems = items.slice(0, maxItems);
   
-  // Собираем RSS
-  const rssData = {
+  var rssData = {
     rss: {
       '@_version': '2.0',
       '@_xmlns:itunes': 'http://www.itunes.com/dtds/podcast-1.0.dtd',
@@ -448,20 +617,15 @@ async function generateRssData(baseUrl) {
         language: config.rss.language,
         copyright: config.rss.copyright,
         lastBuildDate: now.toUTCString(),
-        webMaster: `${config.rss.email} (${config.rss.author})`,
-        
-        // Обложка канала (обязательно квадратная)
+        webMaster: config.rss.email + ' (' + config.rss.author + ')',
         image: {
           url: channelCoverUrl || config.rss.channelImage,
           title: config.rss.title,
           link: config.rss.link
         },
-        
-        // iTunes обложка канала
         'itunes:image': {
           '@_href': channelCoverUrl || config.rss.channelImage
         },
-        
         'itunes:owner': {
           'itunes:name': config.rss.author,
           'itunes:email': config.rss.email
@@ -480,28 +644,25 @@ async function generateRssData(baseUrl) {
 }
 
 // Основной RSS эндпоинт с кэшированием
-app.get('/rss.xml', async (req, res) => {
+app.get('/rss.xml', async function(req, res) {
   try {
-    // Автоматически определяем baseUrl на основе запроса
-    const baseUrl = getBaseUrl(req);
-    const now = Date.now();
+    var baseUrl = getBaseUrl(req);
+    var now = Date.now();
     
     if (config.advanced.verboseLogging) {
-      console.log(`🌐 Используется baseUrl: ${baseUrl} (определен из запроса)`);
+      console.log('Using baseUrl: ' + baseUrl + ' (from request)');
     }
     
-    // Получаем текущий хэш папки с треками
-    const currentFolderHash = await getTracksFolderHash();
+    var currentFolderHash = await getTracksFolderHash();
     
-    // Проверяем, нужно ли обновить кэш
-    const shouldRefreshCache = 
+    var shouldRefreshCache = 
       !rssCache.data ||
       (now - rssCache.lastUpdated) > rssCache.cacheDuration ||
       currentFolderHash !== rssCache.fileHash;
     
     if (shouldRefreshCache) {
       if (config.advanced.verboseLogging) {
-        console.log(`🔄 Обновление RSS кэша...`);
+        console.log('Updating RSS cache...');
       }
       
       rssCache.data = await generateRssData(baseUrl);
@@ -509,23 +670,23 @@ app.get('/rss.xml', async (req, res) => {
       rssCache.fileHash = currentFolderHash;
       
       if (config.advanced.verboseLogging) {
-        console.log(`✅ RSS сгенерирован: ${rssCache.data.rss.channel.item.length} треков`);
+        console.log('RSS generated: ' + rssCache.data.rss.channel.item.length + ' tracks');
       }
     } else if (config.advanced.verboseLogging) {
-      console.log(`💾 Используется кэшированный RSS (возраст: ${Math.round((now - rssCache.lastUpdated) / 1000)}с)`);
+      console.log('Using cached RSS (age: ' + Math.round((now - rssCache.lastUpdated) / 1000) + 's)');
     }
     
-    // Генерируем XML
-    const builder = new XMLBuilder({
+    var builder = new XMLBuilder({
       ignoreAttributes: false,
       format: true,
       suppressEmptyNode: true,
-      attributeNamePrefix: '@_'
+      attributeNamePrefix: '@_',
+      processEntities: true,
+      xmlKeepEntities: true
     });
     
-    const xml = builder.build(rssCache.data);
+    var xml = builder.build(rssCache.data);
     
-    // Добавляем заголовки
     res.setHeader('Content-Type', 'application/rss+xml; charset=utf-8');
     res.setHeader('Cache-Control', 'public, max-age=300');
     res.setHeader('Last-Modified', new Date(rssCache.lastUpdated).toUTCString());
@@ -533,36 +694,36 @@ app.get('/rss.xml', async (req, res) => {
     res.send(xml);
     
   } catch (error) {
-    console.error('❌ Ошибка генерации RSS:', error);
+    console.error('RSS generation error:', error);
     res.status(500).send('Server Error');
   }
 });
 
 // Эндпоинт для принудительного обновления кэша
-app.get('/refresh-rss', async (req, res) => {
+app.get('/refresh-rss', async function(req, res) {
   try {
-    const baseUrl = getBaseUrl(req);
-    const currentFolderHash = await getTracksFolderHash();
+    var baseUrl = getBaseUrl(req);
+    var currentFolderHash = await getTracksFolderHash();
     
     rssCache.data = null;
     rssCache.lastUpdated = 0;
     rssCache.fileHash = '';
     
-    const rssData = await generateRssData(baseUrl);
+    var rssData = await generateRssData(baseUrl);
     rssCache.data = rssData;
     rssCache.lastUpdated = Date.now();
     rssCache.fileHash = currentFolderHash;
     
     res.json({
       success: true,
-      message: 'RSS кэш обновлен',
+      message: 'RSS cache updated',
       baseUrl: baseUrl,
       itemsCount: rssData.rss.channel.item.length,
       refreshedAt: new Date().toISOString()
     });
     
   } catch (error) {
-    console.error('❌ Ошибка принудительного обновления RSS:', error);
+    console.error('RSS refresh error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -572,123 +733,23 @@ app.use('/tracks', express.static(TRACKS_DIR));
 app.use('/covers_cache', express.static(COVERS_CACHE_DIR));
 
 // Информационная страница
-app.get('/', (req, res) => {
-  const baseUrl = getBaseUrl(req);
-  const cacheAge = rssCache.lastUpdated ? Math.round((Date.now() - rssCache.lastUpdated) / 1000) : 0;
-  const itemsCount = rssCache.data?.rss?.channel?.item?.length || 0;
+app.get('/', function(req, res) {
+  var baseUrl = getBaseUrl(req);
+  var cacheAge = rssCache.lastUpdated ? Math.round((Date.now() - rssCache.lastUpdated) / 1000) : 0;
+  var itemsCount = rssCache.data && rssCache.data.rss && rssCache.data.rss.channel && rssCache.data.rss.channel.item ? rssCache.data.rss.channel.item.length : 0;
   
-  res.send(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <title>YouTube RSS Server</title>
-      <meta charset="utf-8">
-      <style>
-        body { font-family: Arial; max-width: 800px; margin: 0 auto; padding: 20px; }
-        h1 { color: #ff0000; }
-        code { background: #f5f5f5; padding: 2px 5px; border-radius: 3px; }
-        .url { color: #0066cc; word-break: break-all; }
-        .info { background: #f0f8ff; padding: 15px; border-radius: 8px; margin: 15px 0; }
-        .cover { max-width: 300px; margin: 15px 0; border-radius: 8px; }
-        .btn { background: #007bff; color: white; padding: 10px 15px; border: none; border-radius: 5px; cursor: pointer; text-decoration: none; display: inline-block; margin: 5px; }
-        .btn:hover { background: #0056b3; }
-        .btn-refresh { background: #28a745; }
-        .btn-refresh:hover { background: #1e7e34; }
-        .features { background: #f0fff0; padding: 10px; border-radius: 5px; margin: 10px 0; }
-        .feature-item { margin: 5px 0; }
-        .base-url-info { background: #fff8e1; padding: 10px; border-radius: 5px; margin: 10px 0; }
-      </style>
-    </head>
-    <body>
-      <h1>✅ YouTube RSS Server</h1>
-      
-      <div class="info">
-        <div class="base-url-info">
-          <h3>🌐 Текущий адрес:</h3>
-          <p><strong>Base URL:</strong> <code class="url">${baseUrl}</code></p>
-          <p><small>Определяется автоматически на основе вашего запроса</small></p>
-        </div>
-        
-        <h2>📡 RSS Feed URL:</h2>
-        <code class="url">${baseUrl}/rss.xml</code>
-        <p><a href="${baseUrl}/rss.xml" target="_blank" class="btn">Открыть RSS</a></p>
-        
-        <h2>📊 Статус:</h2>
-        <p>Возраст кэша: <strong>${cacheAge} секунд</strong></p>
-        <p>Треков в RSS: <strong>${itemsCount}</strong></p>
-        <a href="${baseUrl}/refresh-rss" class="btn btn-refresh">🔄 Обновить RSS</a>
-        
-        <h2>🎯 Особенности:</h2>
-        <div class="features">
-          <div class="feature-item">✅ Автоматическое определение baseUrl (${config.server.baseUrl ? 'из конфига' : 'из запроса'})</div>
-          <div class="feature-item">✅ Автоматическая обрезка обложек до квадрата 3000×3000</div>
-          <div class="feature-item">✅ Обложки скачиваются из ID3 тегов MP3</div>
-          <div class="feature-item">✅ Кэширование обложек в папке .covers_cache</div>
-          <div class="feature-item">✅ Стабильные GUID (треки не вылетают из YouTube)</div>
-          <div class="feature-item">✅ Поддержка ID3 тегов (артист, название, обложка)</div>
-        </div>
-        
-        <h2>📁 Папка с треками:</h2>
-        <p><code>${TRACKS_DIR}</code></p>
-        <p>Просто добавляйте MP3 файлы с ID3 тегами в эту папку.</p>
-        
-        <h2>🎨 Обработка обложек:</h2>
-        <p>Все обложки автоматически обрабатываются:</p>
-        <ol>
-          <li>Извлекаются из MP3 файлов (ID3 теги)</li>
-          <li>Обрезаются до квадрата ${config.rss.youtube.coverSize}×${config.rss.youtube.coverSize}</li>
-          <li>Сохраняются в папку .covers_cache</li>
-          <li>Отдаются в RSS как квадратные изображения</li>
-        </ol>
-        
-        <h2>📧 Подтверждение YouTube:</h2>
-        <p>Email: <code>${config.rss.email}</code></p>
-        <p>YouTube отправит письмо для подтверждения RSS-фида.</p>
-      </div>
-    </body>
-    </html>
-  `);
+  res.send('<!DOCTYPE html><html><head><title>YouTube RSS Server</title><meta charset="utf-8"><style>body{font-family:Arial;max-width:800px;margin:0 auto;padding:20px}h1{color:#ff0000}code{background:#f5f5f5;padding:2px 5px;border-radius:3px}.url{color:#0066cc;word-break:break-all}.info{background:#f0f8ff;padding:15px;border-radius:8px;margin:15px 0}.btn{background:#007bff;color:white;padding:10px 15px;border:none;border-radius:5px;cursor:pointer;text-decoration:none;display:inline-block;margin:5px}.btn:hover{background:#0056b3}.btn-refresh{background:#28a745}.btn-refresh:hover{background:#1e7e34}.features{background:#f0fff0;padding:10px;border-radius:5px;margin:10px 0}.base-url-info{background:#fff8e1;padding:10px;border-radius:5px;margin:10px 0}</style></head><body><h1>YouTube RSS Server</h1><div class="info"><div class="base-url-info"><h3>Current address:</h3><p><strong>Base URL:</strong> <code class="url">' + baseUrl + '</code></p></div><h2>RSS Feed URL:</h2><code class="url">' + baseUrl + '/rss.xml</code><p><a href="' + baseUrl + '/rss.xml" target="_blank" class="btn">Open RSS</a></p><h2>Status:</h2><p>Cache age: <strong>' + cacheAge + ' seconds</strong></p><p>Tracks in RSS: <strong>' + itemsCount + '</strong></p><a href="' + baseUrl + '/refresh-rss" class="btn btn-refresh">Refresh RSS</a><h2>Features:</h2><div class="features"><div class="feature-item">Auto baseUrl detection</div><div class="feature-item">Square cover generation (3000x3000)</div><div class="feature-item">Covers from ID3 tags</div><div class="feature-item">Cover caching</div><div class="feature-item">Custom description template in config.js</div></div><h2>Tracks folder:</h2><p><code>' + TRACKS_DIR + '</code></p><p>Add MP3 files with ID3 tags to this folder.</p></div></body></html>');
 });
 
 // Запуск сервера
 async function startServer() {
   await initDirs();
   
-  // Не инициализируем кэш при запуске, так как baseUrl зависит от запроса
-  if (config.advanced.verboseLogging) {
-    console.log(`⚠️  Кэш не инициализирован при запуске (нужен первый запрос для определения baseUrl)`);
-  }
-  
-  app.listen(PORT, HOST, () => {
-    console.log(`
-🚀 YouTube RSS Server запущен!
-
-📍 Локальный доступ: http://localhost:${PORT}
-📍 Также доступен по вашему локальному IP: http://ваш-ip:${PORT}
-🌐 Для доступа из интернета: используйте ваш внешний IP или домен
-
-📡 RSS Feed URL: будет определен автоматически при запросе
-🔧 Управление кэшем: /refresh-rss
-📧 Email для YouTube: ${config.rss.email}
-
-⚙️ Определение адреса: ${config.server.baseUrl ? 'фиксированный из конфига' : 'автоматически из запроса'}
-
-📁 Папка для треков: ${TRACKS_DIR}
-📁 Кэш обложек: ${COVERS_CACHE_DIR}
-⚙️ Конфигурация: config.js
-
-🎯 ОБРАБОТКА ОБЛОЖЕК:
-   1. Скачиваются из ID3 тегов MP3
-   2. Обрезаются до квадрата ${config.rss.youtube.coverSize}×${config.rss.youtube.coverSize}
-   3. Сохраняются в .covers_cache/
-   4. Отдаются в RSS как квадратные изображения
-
-💡 Советы:
-   - Добавьте обложки в MP3 файлы через ID3 теги
-   - YouTube создаст квадратные видео из обложек
-   - После добавления файлов обновите RSS через /refresh-rss
-   - Для внешнего доступа настройте проброс порта ${PORT} на роутере
-    `);
+  app.listen(PORT, HOST, function() {
+    console.log('YouTube RSS Server started!');
+    console.log('Local access: http://localhost:' + PORT);
+    console.log('RSS Feed: ' + (config.server.baseUrl || '[auto-detected on first request]') + '/rss.xml');
+    console.log('Refresh: /refresh-rss');
   });
 }
 
